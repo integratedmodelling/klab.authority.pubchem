@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.integratedmodelling</groupId>
+        <artifactId>klab-services</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>org.integratedmodelling</groupId>
+    <artifactId>klab.authority.pubchem</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <name>klab.authority.pubchem</name>
+    <description>PubChem and ChEBI chemical identity authority</description>
+    <url>https://github.com/integratedmodelling/klab.authority.pubchem</url>
+
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <klab.version>1.0.0-SNAPSHOT</klab.version>
+    </properties>
+
+    <licenses>
+        <license>
+            <name>GNU Affero GPL 3.0</name>
+            <url>https://www.gnu.org/licenses/agpl-3.0.en.html</url>
+        </license>
+    </licenses>
+
+    <scm>
+        <connection>scm:git:https://github.com/integratedmodelling/klab.authority.pubchem.git</connection>
+        <developerConnection>scm:git:https://github.com/integratedmodelling/klab.authority.pubchem.git</developerConnection>
+        <url>https://github.com/integratedmodelling/klab.authority.pubchem.git</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <organization>
+        <name>Integrated Modelling Partnership</name>
+        <url>https://www.integratedmodelling.org</url>
+    </organization>
+
+    <distributionManagement>
+        <snapshotRepository>
+            <id>ossrh</id>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        </snapshotRepository>
+        <repository>
+            <id>ossrh</id>
+            <url>https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/</url>
+        </repository>
+    </distributionManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.integratedmodelling</groupId>
+            <artifactId>klab.core.services</artifactId>
+            <version>1.0.0-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.13.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <version>1.13.4</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>buildnumber-maven-plugin</artifactId>
+                <configuration>
+                    <!-- The initial development project may not yet be a Git checkout. -->
+                    <revisionOnScmFailure>unversioned</revisionOnScmFailure>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.4</version>
+            </plugin>
+            <plugin>
+                <groupId>org.integratedmodelling</groupId>
+                <artifactId>klab.product</artifactId>
+                <version>1.0.1-SNAPSHOT</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>package-component</goal>
+                        </goals>
+                        <configuration>
+                            <componentName>klab.authority.pubchem</componentName>
+                            <componentDescription>PubChem and ChEBI chemical identity authority</componentDescription>
+                            <componentVendorName>Integrated Modelling Partnership</componentVendorName>
+                            <componentVendorEmail>info@integratedmodelling.org</componentVendorEmail>
+                            <componentLicenseName>GNU Affero GPL 3.0</componentLicenseName>
+                            <componentUsageRights>*</componentUsageRights>
+                            <componentClass>org.integratedmodelling.klab.authority.pubchem.ComponentPlugin</componentClass>
+                            <componentVersion>1.0.0-SNAPSHOT</componentVersion>
+                            <hostRuntimeArtifacts>
+                                org.integratedmodelling:klab.services.reasoner.server:1.0.0-SNAPSHOT,
+                                org.integratedmodelling:klab.services.resources.server:1.0.0-SNAPSHOT
+                            </hostRuntimeArtifacts>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+

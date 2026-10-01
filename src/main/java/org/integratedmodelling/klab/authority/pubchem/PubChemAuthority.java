@@ -17,7 +17,7 @@ import org.integratedmodelling.klab.api.services.runtime.Notification;
     searchable = true, subAuthorities = {"COMPOUND", "CHEBI"})
 public class PubChemAuthority implements Authority {
   public static final String URN = "klab.authority.pubchem";
-  private static final Set<String> PARAMETERS = Set.of("urn", "endpoint", "chebiEndpoint",
+  private static final Set<String> PARAMETERS = Set.of("urn", "endpoint", "autocompleteEndpoint", "chebiEndpoint",
       "timeoutSeconds", "searchLimit", "gifDepictions", "documentationDirectory");
   private final ChemicalHttpClient http;
   private final Map<String, Bridge> bridges;
@@ -28,7 +28,7 @@ public class PubChemAuthority implements Authority {
     this.http = http; this.bridges = bridges; this.filter = filter;
   }
   @Override public String getUrn() { return URN; }
-  @Override public CachePolicy getCachePolicy() { return new CachePolicy("pubchem-chebi-1", 86400, 300, 300); }
+  @Override public CachePolicy getCachePolicy() { return new CachePolicy("pubchem-chebi-2", 86400, 300, 300); }
 
   @Override public String configure(ConfigurationRequest request) {
     var parameters = request.parameters();
@@ -36,6 +36,9 @@ public class PubChemAuthority implements Authority {
     for (var key : parameters.keySet())
       if (!PARAMETERS.contains(key)) throw new IllegalArgumentException("Unknown PubChem parameter: " + key);
     String endpoint = endpoint(parameters.getOrDefault("endpoint", "https://pubchem.ncbi.nlm.nih.gov/rest/pug"));
+    URI base = URI.create(endpoint + "/");
+    String autocompleteEndpoint = endpoint(parameters.getOrDefault("autocompleteEndpoint",
+        base.resolve("/".equals(base.getPath()) ? "autocomplete" : "../autocomplete").toString()));
     String chebiEndpoint = endpoint(parameters.getOrDefault("chebiEndpoint", "https://www.ebi.ac.uk/ols4/api"));
     int limit = integer(parameters, "searchLimit", 10, 1, 50);
     var timeout = Duration.ofSeconds(integer(parameters, "timeoutSeconds", 20, 1, 120));
@@ -49,7 +52,7 @@ public class PubChemAuthority implements Authority {
       if (!directory.isAbsolute()) throw new IllegalArgumentException("documentationDirectory must be absolute");
     }
     String id = UUID.randomUUID().toString();
-    bridges.put(id, new Bridge(request, new PubChemClient(http, endpoint, timeout),
+    bridges.put(id, new Bridge(request, new PubChemClient(http, endpoint, autocompleteEndpoint, timeout),
         new ChebiClient(http, chebiEndpoint, timeout), limit, (Boolean) gifs, directory));
     return id;
   }
@@ -64,9 +67,12 @@ public class PubChemAuthority implements Authority {
   }
 
   private ChemicalIdentity resolve(Bridge bridge, String input) {
+    return resolve(bridge, input, true);
+  }
+  private ChemicalIdentity resolve(Bridge bridge, String input, boolean complete) {
     if (input.matches("(?i)(CID[:_])?[1-9][0-9]*")) {
       String cid = input.replaceFirst("(?i)^CID[:_]", "");
-      return compound(bridge, cid);
+      return compound(bridge, cid, complete);
     }
     if (input.matches("(?i)CHEBI[:_][1-9][0-9]*")) {
       String id = input.toUpperCase(Locale.ROOT).replace('_', ':');
@@ -78,32 +84,35 @@ public class PubChemAuthority implements Authority {
         if (cids.size() == 1) {
           var properties = bridge.pubchem.properties(cids.get(0));
           if (!inchi.equals(properties.path("InChI").asText())) throw new IllegalStateException("Inconsistent ChEBI/PubChem InChI mapping");
-          return compound(bridge, cids.get(0), properties, term);
+          return compound(bridge, cids.get(0), properties, term, complete);
         }
       }
-      return chebi(bridge, id, term);
+      return chebi(bridge, id, term, complete);
     }
-    if (input.startsWith("InChI=")) return uniqueCompound(bridge, "inchi", input);
-    if (input.matches("[A-Z]{14}-[A-Z]{10}-[A-Z]")) return uniqueCompound(bridge, "inchikey", input);
+    if (input.startsWith("InChI=")) return uniqueCompound(bridge, "inchi", input, complete);
+    if (input.matches("[A-Z]{14}-[A-Z]{10}-[A-Z]")) return uniqueCompound(bridge, "inchikey", input, complete);
     throw new IllegalArgumentException("Expected CID, CHEBI, InChI or InChIKey; use search or reconcile for names");
   }
-  private ChemicalIdentity uniqueCompound(Bridge bridge, String namespace, String input) {
+  private ChemicalIdentity uniqueCompound(Bridge bridge, String namespace, String input, boolean complete) {
     var cids = bridge.pubchem.cids(namespace, input);
     if (cids.size() != 1) throw new IllegalArgumentException("Structure identifier matched " + cids.size() + " compounds; explicit selection required");
-    return compound(bridge, cids.get(0));
+    return compound(bridge, cids.get(0), complete);
   }
   private ChemicalIdentity compound(Bridge bridge, String cid) {
-    return compound(bridge, cid, bridge.pubchem.properties(cid), null);
+    return compound(bridge, cid, true);
   }
-  private ChemicalIdentity compound(Bridge bridge, String cid, JsonNode properties, JsonNode knownTerm) {
+  private ChemicalIdentity compound(Bridge bridge, String cid, boolean complete) {
+    return compound(bridge, cid, bridge.pubchem.properties(cid), null, complete);
+  }
+  private ChemicalIdentity compound(Bridge bridge, String cid, JsonNode properties, JsonNode knownTerm, boolean complete) {
     var parents = new TreeSet<String>();
     var matches = new TreeMap<String, JsonNode>();
     if (knownTerm != null) matches.put(knownTerm.path("obo_id").asText(), knownTerm);
-    for (String id : bridge.pubchem.chebiReferences(cid)) {
+    for (String id : complete ? bridge.pubchem.chebiReferences(cid) : List.<String>of()) {
       var term = matches.containsKey(id) ? matches.get(id) : bridge.chebi.term(id);
       if (properties.path("InChI").asText().equals(ChebiClient.inchi(term))) matches.put(id, term);
     }
-    for (String id : matches.keySet()) {
+    for (String id : complete ? matches.keySet() : Set.<String>of()) {
       bridge.chebi.validateHierarchy(id);
       parents.addAll(bridge.chebi.parents(id));
     }
@@ -114,20 +123,20 @@ public class PubChemAuthority implements Authority {
     String id = "CID:" + cid;
     var docs = ChemicalDocumentation.build(id, properties.path("Title").asText(), metadata,
         List.copyOf(parents), bridge.pubchem, cid, bridge.pubchem.propertyUrl(cid),
-        bridge.directory, bridge.gif);
-    return identity(bridge, id, properties.path("Title").asText(), List.copyOf(parents), docs);
+        bridge.directory, complete && bridge.gif);
+    return identity(bridge, id, properties.path("Title").asText(), List.copyOf(parents), docs, complete);
   }
-  private ChemicalIdentity chebi(Bridge bridge, String id, JsonNode term) {
-    bridge.chebi.validateHierarchy(id);
-    var parents = bridge.chebi.parents(id);
+  private ChemicalIdentity chebi(Bridge bridge, String id, JsonNode term, boolean complete) {
+    if (complete) bridge.chebi.validateHierarchy(id);
+    var parents = complete ? bridge.chebi.parents(id) : List.<String>of();
     var docs = ChemicalDocumentation.build(id, term.path("label").asText(), term, parents,
         bridge.pubchem, null, bridge.chebi.termUrl(id), bridge.directory, false);
-    return identity(bridge, id, term.path("label").asText(), parents, docs);
+    return identity(bridge, id, term.path("label").asText(), parents, docs, complete);
   }
   private ChemicalIdentity identity(Bridge bridge, String id, String label, List<String> parents,
-      ChemicalDocumentation.Result docs) {
+      ChemicalDocumentation.Result docs, boolean complete) {
     return new ChemicalIdentity(id, id.replace(':', '_'), bridge.request.name(),
-        parents.isEmpty() ? bridge.request.rootIdentity() : null, parents, docs.urls(),
+        complete && parents.isEmpty() ? bridge.request.rootIdentity() : null, parents, docs.urls(),
         docs.description(), label, 1, bridge.request.name() + ":" + id.replace(':', '_'), docs.notifications());
   }
 
@@ -139,24 +148,40 @@ public class PubChemAuthority implements Authority {
     String value = input(query);
     var results = new LinkedHashMap<String, Identity>();
     if (isCode(value)) {
-      var identity = resolve(bridge, value);
+      var identity = resolve(bridge, value, false);
       results.put(identity.getId(), identity);
     } else {
       if (!"CHEBI".equals(selected)) {
         var ids = bridge.pubchem.cids("name", value);
         for (String cid : ids.stream().limit(bridge.limit).toList()) {
-          var identity = compound(bridge, cid);
+          var identity = compound(bridge, cid, false);
           results.put(identity.getId(), identity);
+        }
+        if (ids.isEmpty()) {
+          for (String name : bridge.pubchem.suggestions(value, Math.min(5, bridge.limit))) {
+            for (String cid : bridge.pubchem.cids("name", name)) {
+              if (results.size() >= bridge.limit) break;
+              var identity = score(compound(bridge, cid, false), 0.75f);
+              results.putIfAbsent(identity.getId(), identity);
+            }
+            if (results.size() >= bridge.limit) break;
+          }
         }
       }
       if (!"COMPOUND".equals(selected)) {
         for (String id : bridge.chebi.search(value, bridge.limit, false).ids()) {
-          var identity = resolve(bridge, id);
+          if (results.size() >= bridge.limit) break;
+          var identity = score(resolve(bridge, id, false), 0.5f);
           results.putIfAbsent(identity.getId(), identity);
         }
       }
     }
     return List.copyOf(results.values().stream().limit(bridge.limit).toList());
+  }
+  private static ChemicalIdentity score(ChemicalIdentity identity, float score) {
+    return new ChemicalIdentity(identity.id(), identity.conceptName(), identity.authorityName(),
+        identity.baseIdentity(), identity.parentIds(), identity.documentation(), identity.description(),
+        identity.label(), score, identity.locator(), identity.notifications());
   }
 
   @Override public Identity reconcile(String configurationId, Map<String, String> fields) {

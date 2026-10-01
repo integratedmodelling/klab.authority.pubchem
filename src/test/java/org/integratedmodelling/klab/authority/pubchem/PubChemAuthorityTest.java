@@ -230,6 +230,42 @@ class PubChemAuthorityTest {
     assertEquals("CID:962", authority.reconcile(bridge, Map.of("name", "water")).getId());
   }
 
+  @Test void partialCompoundNamesUseAutocompleteAndRetainMarkdown() {
+    put("/autocomplete/compound/wat/json", "{\"status\":{\"code\":0},\"total\":1,\"dictionary_terms\":{\"compound\":[\"water\"]}}");
+    String bridge = configure();
+    var result = authority.search("wat", "COMPOUND", bridge);
+    assertEquals(1, result.size());
+    assertEquals("CID:962", result.get(0).getId());
+    assertEquals(0.75f, result.get(0).getScore());
+    assertTrue(result.get(0).getDescription().startsWith("# Water\n\n"));
+    assertTrue(result.get(0).getDocumentation().containsKey("text/markdown"));
+    assertTrue(requests.stream().anyMatch(r -> r.contains("/autocomplete/compound/wat/")));
+    assertFalse(requests.stream().anyMatch(r -> r.contains("/PNG") || r.contains("/parents") || r.contains("/synonyms")));
+    clean(authority.resolveIdentity(bridge, result.get(0).getId()));
+    error(authority.resolveIdentity(bridge, "wat"));
+    error(authority.reconcile(bridge, Map.of("name", "wat", "catalog", "COMPOUND")));
+  }
+
+  @Test void exactCompoundNamesTakePriorityAndSearchDefersHierarchyAndGifWork() {
+    String bridge = configure();
+    var results = authority.search("water", "COMPOUND", bridge);
+    assertEquals("CID:962", results.getFirst().getId());
+    assertEquals(1f, results.getFirst().getScore());
+    assertNull(results.getFirst().getBaseIdentity());
+    assertTrue(results.getFirst().getParentIds().isEmpty());
+    assertFalse(requests.stream().anyMatch(r -> r.contains("autocomplete") || r.contains("/PNG") || r.contains("/parents") || r.contains("/synonyms")));
+    clean(authority.resolveIdentity(bridge, results.getFirst().getId()));
+    assertTrue(requests.stream().anyMatch(r -> r.contains("/parents")));
+  }
+
+  @Test void emptyAutocompleteIsNoMatchButMalformedAutocompleteIsAFailure() {
+    String bridge = configure();
+    put("/autocomplete/compound/nothing/json", "{\"status\":{\"code\":0},\"total\":0}");
+    assertTrue(authority.search("nothing", "COMPOUND", bridge).isEmpty());
+    put("/autocomplete/compound/nothing/json", "{\"status\":{\"code\":0}}");
+    assertThrows(IllegalStateException.class, () -> authority.search("nothing", "COMPOUND", bridge));
+  }
+
   @Test void invalidHierarchyAndObsoleteTermsRejectMaterialization() {
     String bridge = configure();
     term("CHEBI:24632", "hydrocarbon", "", List.of("CHEBI:24632"));

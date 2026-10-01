@@ -55,6 +55,7 @@ probe. `releaseConfiguration()` removes the handle. Unknown/released handles thr
 | --- | --- | --- |
 | `urn` | Required | Exactly `klab.authority.pubchem`. |
 | `endpoint` | `https://pubchem.ncbi.nlm.nih.gov/rest/pug` | PubChem PUG REST base URL. |
+| `autocompleteEndpoint` | Sibling `../autocomplete` URL of `endpoint` | PubChem REST partial-name/autocomplete service. Defaults to `https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete`; can be overridden for a proxy or fixture server. |
 | `chebiEndpoint` | `https://www.ebi.ac.uk/ols4/api` | OLS4 API base URL serving ChEBI. |
 | `timeoutSeconds` | `20` | Complete deadline for each HTTP operation, including pacing, retries and body; integer 1–120. |
 | `searchLimit` | `10` | Maximum returned candidates; integer 1–50. |
@@ -115,11 +116,22 @@ var family = authority.resolveIdentity(bridge, "CHEBI_24632");
 var selected = authority.reconcile(bridge, Map.of("name", "hydrocarbons", "catalog", "CHEBI"));
 ```
 
-Search combines PubChem complete-name matches with ChEBI label/synonym matches, canonicalizes
-molecular terms, deduplicates by canonical ID and returns up to the configured limit. The first
-PubChem candidates precede ontology-only candidates. Results are candidates for user selection,
+Search accepts ordinary words and codes. It combines PubChem complete-name matches with ChEBI
+label/synonym matches. When PubChem finds no complete-name match, its documented
+[autocomplete service](https://pubchem.ncbi.nlm.nih.gov/docs/autocomplete) supplies up to five partial
+or fuzzy name suggestions (bounded also by `searchLimit`); each suggested name is looked up by
+complete name to obtain real CIDs. For example, `wat` can suggest water. Exact PubChem names take
+priority and do not trigger autocomplete. Results canonicalize molecular terms, deduplicate by
+canonical ID and return up to the configured limit. Scores are relevance tiers: 1 for direct codes
+and complete PubChem name matches, 0.75 for autocomplete, and 0.5 for ChEBI lexical candidates.
+The first PubChem candidates precede ontology-only candidates. Results are candidates for user selection,
 not an assertion that an arbitrary name denotes one molecule. Empty successful searches mean no
-matches; HTTP/schema/hierarchy failures throw, rather than masquerading as empty results.
+matches; HTTP/schema/structure-mapping failures throw, rather than masquerading as empty results.
+Search candidates carry required Markdown descriptions and documentation URLs, but ancestry
+validation and GIF generation are deferred to `resolveIdentity()` or exact reconciliation after
+selection. Their omitted parent/base fields do not assert a parentless identity. The shared Reasoner
+cache already keeps search results separate from identity lookup, so a candidate never bypasses
+the stronger materialization checks.
 
 `COMPOUND` and `CHEBI` are advertised search filters. `CHEM.CHEBI:<code>` resolves through the
 base bridge and retains its canonical namespace; explicit provider views share bridge state and
@@ -172,7 +184,7 @@ errors. Operations involving multiple records may exceed one HTTP deadline in to
 The client uses HTTP/1.1: during live testing OLS4 closed the JDK's HTTP/2 connections with GOAWAY,
 while HTTP/1.1 served the same requests successfully.
 
-Reasoner persistence uses the core cache and DTOs. Policy revision `pubchem-chebi-1` retains identities
+Reasoner persistence uses the core cache and DTOs. Policy revision `pubchem-chebi-2` retains identities
 for one day and search/reconciliation for five minutes. PubChem and hosted ChEBI are mutable; neither
 is advertised as immutable or release-pinned. Each ChEBI client retains at most 512 raw lookup/parent
 responses for five minutes to avoid repeated hierarchy calls. Cache expiry does not rewrite already
@@ -196,8 +208,8 @@ mvn package
 ```
 
 The packaging plug-in produces the standard component archive under `target/`. Host dependencies
-are `provided`; packaging targets Reasoner and Resources servers. This scaffold has no Git checkout,
-so the buildnumber plug-in uses `unversioned` until one is initialized. No remote publication occurs.
+are `provided`; packaging targets Reasoner and Resources servers. The buildnumber plug-in records
+the current Git revision, or uses `unversioned` outside a Git checkout. No remote publication occurs.
 
 Ordinary tests use a loopback HTTP server and synthetic molecular PNGs. They cover discovery,
 configuration isolation/release, CID/InChI/ChEBI canonicalization, verified structural links, families,
@@ -215,3 +227,10 @@ The live test checks official water CID/ChEBI mapping, hydrocarbon family lookup
 and GIF output. On 2026-10-01, all 16 fixture tests, the separately enabled live smoke test, and
 component packaging passed. The ordinary build skips the live test.
 Live results reflect mutable upstream data and are not fixtures.
+
+The search follow-up on 2026-10-01 passed 19 fixture tests and a live test covering default-limit
+`water` search and partial `wat` compound search, then rebuilt the component archive. Before the
+change, a live ten-candidate `water` search spent approximately 49 seconds validating full ancestry;
+search now defers that work until identity selection. This is a latency finding, not confirmation
+of the cause of any particular front-end failure. Reload the updated component in active services
+to adopt the changed search behavior.

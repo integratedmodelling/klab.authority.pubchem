@@ -168,7 +168,7 @@ public class PubChemAuthority implements Authority {
           }
         }
       }
-      if (!"COMPOUND".equals(selected)) {
+      if (!"COMPOUND".equals(selected) && results.size() < bridge.limit) {
         for (String id : bridge.chebi.search(value, bridge.limit, false).ids()) {
           if (results.size() >= bridge.limit) break;
           var identity = score(resolve(bridge, id, false), 0.5f);

@@ -19,6 +19,44 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
 class PubChemAuthorityTest {
+  @Test void unmappedChebiStructureDoesNotDiscardValidCompoundSearchResults() {
+    term("CHEBI:24632", "unmapped structure", "InChI=1S/Unmapped", List.of("CHEBI:24431"));
+    put("/compound/inchi/cids/JSON?inchi=" + ChemicalHttpClient.encode("InChI=1S/Unmapped"),
+        "{\"IdentifierList\":{\"CID\":[0]}}");
+    String bridge = configure();
+    var results = authority.search("water", null, bridge);
+    assertEquals(List.of("CID:962", "CHEBI:24632"), results.stream().map(Authority.Identity::getId).toList());
+    clean(authority.resolveIdentity(bridge, "CHEBI:24632"));
+  }
+
+  @Test void searchThenSelectionReusesValidatedCompoundProperties() {
+    String bridge = authority.configure(request("CHEM", "chemistry:ChemicalIdentity", Map.of("gifDepictions", false)));
+    authority.search("water", "COMPOUND", bridge);
+    authority.search("water", "COMPOUND", bridge);
+    clean(authority.resolveIdentity(bridge, "CID:962"));
+    assertEquals(1, requests.stream().filter(PROPERTIES::equals).count());
+    assertEquals(1, requests.stream().filter(p -> p.startsWith("/compound/name/cids/")).count());
+    // A separate configuration has a separate data cache.
+    authority.search("water", "COMPOUND", configure());
+    assertEquals(2, requests.stream().filter(PROPERTIES::equals).count());
+  }
+
+  @Test void fullCompoundPageDoesNotStartAnotherCatalogSearch() {
+    String bridge = authority.configure(request("CHEM", "chemistry:ChemicalIdentity", Map.of("searchLimit", 1)));
+    assertEquals(1, authority.search("water", null, bridge).size());
+    assertTrue(requests.stream().noneMatch(p -> p.startsWith("/search")));
+  }
+
+  @Test void invalidCompoundResponsesAreNotCached() {
+    String bridge = configure();
+    byte[] valid = responses.get(PROPERTIES);
+    put(PROPERTIES, "{\"PropertyTable\":{\"Properties\":[]}}");
+    assertThrows(IllegalStateException.class, () -> authority.search("water", "COMPOUND", bridge));
+    responses.put(PROPERTIES, valid);
+    assertEquals("CID:962", authority.search("water", "COMPOUND", bridge).getFirst().getId());
+    assertEquals(2, requests.stream().filter(PROPERTIES::equals).count());
+  }
+
   private HttpServer server;
   private PubChemAuthority authority;
   private String endpoint;

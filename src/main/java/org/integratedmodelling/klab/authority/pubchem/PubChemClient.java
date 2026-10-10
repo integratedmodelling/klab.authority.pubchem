@@ -11,12 +11,37 @@ final class PubChemClient {
   private final String endpoint;
   private final String autocompleteEndpoint;
   private final Duration timeout;
+  private record Cached<T>(T value, long expires) {}
+  private final Map<String, Cached<JsonNode>> properties = boundedCache();
+  private final Map<String, Cached<List<String>>> identifiers = boundedCache();
+  private final Map<String, Cached<List<String>>> references = boundedCache();
+
+  private static <T> Map<String, Cached<T>> boundedCache() {
+    return new LinkedHashMap<>(16, .75f, true) {
+      @Override protected boolean removeEldestEntry(Map.Entry<String, Cached<T>> entry) {
+        return size() > 256;
+      }
+    };
+  }
+
+  private synchronized <T> T cached(Map<String, Cached<T>> cache, String key,
+      java.util.function.Supplier<T> lookup) {
+    var hit = cache.get(key);
+    if (hit != null && hit.expires() > System.nanoTime()) return hit.value();
+    // Only validated successes reach the cache. An exception leaves the request retryable.
+    T value = lookup.get();
+    cache.put(key, new Cached<>(value, System.nanoTime() + Duration.ofMinutes(5).toNanos()));
+    return value;
+  }
   PubChemClient(ChemicalHttpClient http, String endpoint, String autocompleteEndpoint, Duration timeout) {
     this.http = http; this.endpoint = endpoint; this.autocompleteEndpoint = autocompleteEndpoint; this.timeout = timeout;
   }
   String propertyUrl(String cid) { return endpoint + "/compound/cid/" + cid + "/property/" + PROPERTIES + "/JSON"; }
   String depictionUrl(String cid) { return endpoint + "/compound/cid/" + cid + "/PNG?image_size=large"; }
   JsonNode properties(String cid) {
+    return cached(properties, cid, () -> lookupProperties(cid)).deepCopy();
+  }
+  private JsonNode lookupProperties(String cid) {
     var response = http.json(propertyUrl(cid), timeout);
     if (response == null) throw new IllegalArgumentException("Unknown PubChem CID: " + cid);
     var items = response.path("PropertyTable").path("Properties");
@@ -26,6 +51,9 @@ final class PubChemClient {
     return items.get(0);
   }
   List<String> cids(String namespace, String input) {
+    return cached(identifiers, namespace + ":" + input, () -> lookupCids(namespace, input));
+  }
+  private List<String> lookupCids(String namespace, String input) {
     String url = endpoint + "/compound/" + namespace + "/cids/JSON?" + namespace + "=" + ChemicalHttpClient.encode(input);
     if ("name".equals(namespace)) url += "&name_type=complete";
     var response = http.json(url, timeout);
@@ -35,12 +63,18 @@ final class PubChemClient {
     var ids = new LinkedHashSet<String>();
     for (var value : array) {
       String id = value.asText();
+      // PUG REST returns CID 0 for some unmapped structures (e.g. ChEBI ions).
+      // It is not a compound: retain the ChEBI identity instead of failing all results.
+      if ("0".equals(id)) continue;
       if (!id.matches("[1-9][0-9]*")) throw new IllegalStateException("Invalid PubChem CID");
       ids.add(id);
     }
     return List.copyOf(ids);
   }
   List<String> chebiReferences(String cid) {
+    return cached(references, cid, () -> lookupChebiReferences(cid));
+  }
+  private List<String> lookupChebiReferences(String cid) {
     var response = http.json(endpoint + "/compound/cid/" + cid + "/synonyms/JSON", timeout);
     if (response == null) throw new IllegalStateException("PubChem compound synonyms unavailable");
     var info = response.path("InformationList").path("Information");

@@ -19,6 +19,43 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
 class PubChemAuthorityTest {
+  @Test void boundariesSkipAncestryButPreserveReconciliationAndExplicitExpansion() {
+    String bridge = authority.configure(request("CHEM", "chemistry:ChemicalIdentity",
+        Map.of("gifDepictions", false, "semanticBoundaries", Map.of("COMPOUND", "chemistry:Compound"))));
+    var selected = authority.resolveIdentity(bridge, "CHEBI:15377");
+    clean(selected);
+    assertEquals("CID:962", selected.getId());
+    assertEquals(Set.of("COMPOUND"), selected.getSemanticBoundaries());
+    assertEquals(Authority.HierarchyStatus.DEFERRED, selected.getHierarchyStatus());
+    assertTrue(selected.getParentIds().isEmpty());
+    assertTrue(requests.stream().noneMatch(r -> r.contains("/parents") || r.contains("/synonyms")));
+    var full = authority.resolveIdentity(bridge, selected.getId(), Authority.ResolutionMode.FULL_HIERARCHY);
+    clean(full);
+    assertEquals(selected.getConceptName(), full.getConceptName());
+    assertEquals(Authority.HierarchyStatus.COMPLETE, full.getHierarchyStatus());
+    assertFalse(full.getParentIds().isEmpty());
+    assertTrue(requests.stream().anyMatch(r -> r.contains("/parents")));
+    assertEquals(Authority.HierarchyStatus.COMPLETE, authority.resolveIdentity(bridge, "CHEBI:24632").getHierarchyStatus());
+    assertThrows(IllegalArgumentException.class, () -> authority.configure(request("BAD", "chemistry:ChemicalIdentity",
+        Map.of("semanticBoundaries", Map.of("UNKNOWN", "chemistry:Compound")))));
+  }
+
+  @Test void completeParentRecordsSupplyTermsButPartialRecordsDoNot() throws Exception {
+    var parent = new ObjectMapper().readTree(termNode("CHEBI:24431", "chemical entity", ""));
+    ((com.fasterxml.jackson.databind.node.ObjectNode) parent).put("iri", "http://purl.obolibrary.org/obo/CHEBI_24431")
+        .putObject("_links").putObject("self").put("href", endpoint + "/term/24431");
+    put(parentKey("CHEBI:24632"), "{\"_embedded\":{\"terms\":[" + parent + "]}}");
+    var client = new ChebiClient(new ChemicalHttpClient(), endpoint, Duration.ofSeconds(5));
+    client.validateHierarchy("CHEBI:24632");
+    assertEquals("chemical entity", client.term("CHEBI:24431").path("label").asText());
+    assertFalse(requests.stream().anyMatch(r -> r.equals(termKey("CHEBI:24431"))));
+    requests.clear();
+    // The ordinary fixture deliberately supplies partial parent representations.
+    client = new ChebiClient(new ChemicalHttpClient(), endpoint, Duration.ofSeconds(5));
+    client.validateHierarchy("CHEBI:33245");
+    assertTrue(requests.stream().anyMatch(r -> r.equals(termKey("CHEBI:24431"))));
+  }
+
   @Test void unmappedChebiStructureDoesNotDiscardValidCompoundSearchResults() {
     term("CHEBI:24632", "unmapped structure", "InChI=1S/Unmapped", List.of("CHEBI:24431"));
     put("/compound/inchi/cids/JSON?inchi=" + ChemicalHttpClient.encode("InChI=1S/Unmapped"),

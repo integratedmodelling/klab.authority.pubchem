@@ -18,7 +18,7 @@ import org.integratedmodelling.klab.api.services.runtime.Notification;
 public class PubChemAuthority implements Authority {
   public static final String URN = "klab.authority.pubchem";
   private static final Set<String> PARAMETERS = Set.of("urn", "endpoint", "autocompleteEndpoint", "chebiEndpoint",
-      "timeoutSeconds", "searchLimit", "gifDepictions", "documentationDirectory");
+      "timeoutSeconds", "searchLimit", "gifDepictions", "documentationDirectory", "semanticBoundaries");
   private final ChemicalHttpClient http;
   private final Map<String, Bridge> bridges;
   private final String filter;
@@ -28,9 +28,11 @@ public class PubChemAuthority implements Authority {
     this.http = http; this.bridges = bridges; this.filter = filter;
   }
   @Override public String getUrn() { return URN; }
-  @Override public CachePolicy getCachePolicy() { return new CachePolicy("pubchem-chebi-2", 86400, 300, 300); }
+  @Override public CachePolicy getCachePolicy() { return new CachePolicy("pubchem-chebi-3", 86400, 300, 300); }
+  @Override public Set<String> getSemanticBoundaries() { return Set.of("COMPOUND", "CHEBI"); }
 
   @Override public String configure(ConfigurationRequest request) {
+    request.requireSupportedBoundaries(getSemanticBoundaries());
     var parameters = request.parameters();
     if (!URN.equals(parameters.get("urn"))) throw new IllegalArgumentException("Wrong PubChem provider URN");
     for (var key : parameters.keySet())
@@ -61,8 +63,23 @@ public class PubChemAuthority implements Authority {
   }
 
   @Override public Identity resolveIdentity(String configurationId, String identityId) {
+    return resolveIdentity(configurationId, identityId, ResolutionMode.CONFIGURED);
+  }
+
+  @Override public Identity resolveIdentity(String configurationId, String identityId, ResolutionMode mode) {
     var bridge = bridge(configurationId);
-    try { return resolve(bridge, input(identityId)); }
+    try {
+      String code = input(identityId);
+      if (mode == ResolutionMode.CONFIGURED && !bridge.request.semanticBoundaries().isEmpty()) {
+        var reconciled = resolve(bridge, code, false);
+        String boundary = reconciled.getId().startsWith("CID:") ? "COMPOUND" : "CHEBI";
+        if (bridge.request.semanticBoundaries().containsKey(boundary))
+          return new ClassifiedIdentity(reconciled, Set.of(boundary), HierarchyStatus.DEFERRED);
+      }
+      var resolved = resolve(bridge, code);
+      return new ClassifiedIdentity(resolved, Set.of(resolved.getId().startsWith("CID:") ? "COMPOUND" : "CHEBI"),
+          HierarchyStatus.COMPLETE);
+    }
     catch (RuntimeException e) { return failure(bridge, identityId, e.getMessage()); }
   }
 
@@ -198,7 +215,7 @@ public class PubChemAuthority implements Authority {
         var cids = bridge.pubchem.cids("name", name);
         if (cids.size() > 1) return failure(bridge, name, "Ambiguous PubChem name; use search and select a code");
         if (cids.size() == 1) {
-          var identity = compound(bridge, cids.get(0));
+          var identity = resolveIdentity(configurationId, "CID:" + cids.get(0));
           matches.put(identity.getId(), identity);
         }
       }
@@ -206,7 +223,7 @@ public class PubChemAuthority implements Authority {
         var search = bridge.chebi.search(name, 100, true);
         if (search.truncated()) return failure(bridge, name, "ChEBI candidates exceed reconciliation limit; select a code");
         for (String id : search.ids()) {
-          var identity = resolve(bridge, id);
+          var identity = resolveIdentity(configurationId, id);
           matches.putIfAbsent(identity.getId(), identity);
         }
       }

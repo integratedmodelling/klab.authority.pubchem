@@ -59,6 +59,7 @@ probe. `releaseConfiguration()` removes the handle. Unknown/released handles thr
 | `chebiEndpoint` | `https://www.ebi.ac.uk/ols4/api` | OLS4 API base URL serving ChEBI. |
 | `timeoutSeconds` | `20` | Complete deadline for each HTTP operation, including pacing, retries and body; integer 1–120. |
 | `searchLimit` | `10` | Maximum returned candidates; integer 1–50. |
+| `semanticBoundaries` | Empty map | Map `COMPOUND` and/or `CHEBI` to worldview identity URNs to defer ancestry after reconciliation. |
 | `gifDepictions` | `true` | Fetch PNG and convert to GIF for molecular documentation. |
 | `documentationDirectory` | JVM temporary directory / `klab.authority.pubchem/documentation` | Absolute host path for content-addressed Markdown and GIF files. Set a durable service-owned directory in production. |
 
@@ -66,6 +67,27 @@ Endpoint overrides require HTTPS; HTTP is permitted on loopback for fixture test
 parameters, fractional limits and string booleans are rejected. No API key is required or supported.
 
 ## Identity and canonicalization
+
+### Optional semantic boundaries
+
+Add `semanticBoundaries: {"COMPOUND": "chemistry:Compound"}` to the worldview authority
+parameters to defer external ancestry for reconciled PubChem CIDs. The target must be a declared
+worldview **identity**. `CHEBI` is also supported for ChEBI identities that remain distinct after
+reconciliation. A ChEBI code mapped to a CID uses `COMPOUND`, even when found through ChEBI search.
+Unmapped identities retain full hierarchy validation.
+
+Mapped resolution validates canonical identity and returns `HierarchyStatus.DEFERRED`, with
+boundary membership and no external parent/base edges. It skips ChEBI ancestry, PubChem ChEBI
+synonym discovery and optional depiction downloads. The Reasoner attaches the identity directly to
+the configured categories and bridge root. Search results are still candidates, not proof of
+identity validity. `resolveIdentity(config, code, ResolutionMode.FULL_HIERARCHY)` restores the
+normal complete resolution path on demand; the Reasoner's authenticated
+`POST /api/v1/authority/hierarchy` enriches the same concept in place.
+
+This requires the updated services API and Reasoner. Configuration-bound persistent caching keeps
+deferred and complete records separate. Rebuild/redeploy the provider and services, then reload
+the worldview declaration to enable the mapping. Authoritative codelist boundaries can use the
+same general contract in providers that advertise and validate their membership.
 
 The provider resolves codes; human names require `search()` or explicit `reconcile()`.
 

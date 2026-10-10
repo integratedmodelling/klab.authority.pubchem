@@ -9,6 +9,25 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 /** Explicit opt-in smoke test; ordinary builds use local fixtures only. */
 @EnabledIfSystemProperty(named = "pubchem.live", matches = "true")
 class PubChemLiveTest {
+  @Test void mappedAspirinDefersAncestry() {
+    var authority = new PubChemAuthority();
+    String bridge = authority.configure(new Authority.ConfigurationRequest("test", "CHEM",
+        "chemistry:Identity", Map.of("urn", PubChemAuthority.URN,
+            "semanticBoundaries", Map.of("COMPOUND", "chemistry:Compound"))));
+    try {
+      for (String phase : java.util.List.of("cold", "warm")) {
+        long start = System.nanoTime();
+        var aspirin = authority.resolveIdentity(bridge, "CID:2244");
+        assertTrue(aspirin.getNotifications().isEmpty(), aspirin.getDescription());
+        assertEquals("CID:2244", aspirin.getId());
+        assertEquals(Authority.HierarchyStatus.DEFERRED, aspirin.getHierarchyStatus());
+        assertTrue(aspirin.getParentIds().isEmpty());
+        assertTrue(aspirin.getDocumentation().containsKey("text/markdown"));
+        System.out.printf("Mapped Aspirin %s resolution: %.3f s%n", phase, (System.nanoTime() - start) / 1e9);
+      }
+    } finally { authority.releaseConfiguration(bridge); }
+  }
+
   @Test void ordinaryWaterSearch() {
     var authority = new PubChemAuthority();
     String bridge = authority.configure(new Authority.ConfigurationRequest("test", "CHEM",
